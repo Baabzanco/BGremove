@@ -1,0 +1,7 @@
+{
+  "name": "AI Background Remover (BiRefNet-lite 512)",
+  "description": "100% private client-side AI background removal using BiRefNet-lite 512 with WebGPU and WASM fallback. Your image never leaves your browser.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
