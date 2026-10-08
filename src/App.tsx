@@ -5,22 +5,55 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Header } from './components/Header';
+import { ModelSelector } from './components/ModelSelector';
 import { ImageUploader } from './components/ImageUploader';
 import { ImagePreview } from './components/ImagePreview';
 import { ResultPreview } from './components/ResultPreview';
 import { CompareSlider } from './components/CompareSlider';
 import { ProcessingStatus } from './components/ProcessingStatus';
 import { PerformanceBar } from './components/PerformanceBar';
+import { MODEL_REGISTRY, DEFAULT_MODEL_ID, getModelMetadata } from './ai/registry';
+import { detectBestRuntime } from './ai/runtime';
+import { isModelCached, markModelAsCached } from './ai/cache';
 import type {
   ExecutionRuntime,
+  ModelId,
+  ModelCacheStatus,
   ProcessingStatus as StatusType,
   ModelProgressInfo,
   ProcessingMetrics,
   WorkerOutgoingMessage,
 } from './types';
-import { Columns2, SlidersHorizontal, ShieldCheck, Cpu } from 'lucide-react';
+import { Columns2, SlidersHorizontal, ShieldCheck } from 'lucide-react';
+
+const STORAGE_SELECTED_MODEL = 'background-removal-selected-model';
 
 export default function App() {
+  // Selected Model (persisted locally, but never auto-downloaded on page load)
+  const [selectedModelId, setSelectedModelId] = useState<ModelId>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_SELECTED_MODEL) as ModelId;
+      if (saved && MODEL_REGISTRY[saved]) {
+        return saved;
+      }
+    } catch {
+      // Fallback
+    }
+    return DEFAULT_MODEL_ID;
+  });
+
+  // Model cache and download progress states
+  const [cacheStates, setCacheStates] = useState<Record<ModelId, ModelCacheStatus>>({
+    'birefnet-lite-512': 'not-downloaded',
+    'isnet-int8': 'not-downloaded',
+    'modnet': 'not-downloaded',
+  });
+  const [downloadProgress, setDownloadProgress] = useState<Record<ModelId, number | undefined>>({
+    'birefnet-lite-512': undefined,
+    'isnet-int8': undefined,
+    'modnet': undefined,
+  });
+
   const [status, setStatus] = useState<StatusType>('idle');
   const [progressInfo, setProgressInfo] = useState<ModelProgressInfo | null>(null);
   const [metrics, setMetrics] = useState<ProcessingMetrics | null>(null);
@@ -33,7 +66,8 @@ export default function App() {
   const [originalDimensions, setOriginalDimensions] = useState<{ width: number; height: number } | null>(null);
   const [originalSizeStr, setOriginalSizeStr] = useState<string>('');
   const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const [resultBlob, setResultBlob] = useState<Blob | null>(null);
+  const [resultPngBlob, setResultPngBlob] = useState<Blob | null>(null);
+  const [resultWebpBlob, setResultWebpBlob] = useState<Blob | null>(null);
 
   // View mode
   const [viewMode, setViewMode] = useState<'side-by-side' | 'split'>('side-by-side');
@@ -41,26 +75,25 @@ export default function App() {
   // Web Worker ref
   const workerRef = useRef<Worker | null>(null);
 
-  // Initialize Worker and detect hardware WebGPU capability
+  // Check cache status for all models on mount (without downloading anything)
   useEffect(() => {
-    // 1. Detect WebGPU
-    const checkGPU = async () => {
-      if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-        try {
-          const adapter = await (navigator as any).gpu.requestAdapter();
-          if (adapter) {
-            setDetectedRuntime('WebGPU');
-            return;
-          }
-        } catch {
-          // Fallback to WASM
-        }
+    const checkCaches = async () => {
+      const states: Record<ModelId, ModelCacheStatus> = { ...cacheStates };
+      for (const id of Object.keys(MODEL_REGISTRY) as ModelId[]) {
+        const cached = await isModelCached(id);
+        states[id] = cached ? 'cached' : 'not-downloaded';
       }
-      setDetectedRuntime('WASM');
+      setCacheStates(states);
     };
-    checkGPU();
+    checkCaches();
+  }, []);
 
-    // 2. Initialize Web Worker
+  // Initialize centralized runtime detection & Web Worker
+  useEffect(() => {
+    // 1. Centralized Runtime Detection
+    detectBestRuntime().then((rt) => setDetectedRuntime(rt));
+
+    // 2. Initialize Web Worker (LAZY-LOADED: do not send preload on page load!)
     try {
       const worker = new Worker(
         new URL('./workers/backgroundRemoval.worker.ts', import.meta.url),
@@ -68,30 +101,64 @@ export default function App() {
       );
 
       worker.onmessage = (event: MessageEvent<WorkerOutgoingMessage>) => {
-        const { type, status: newStatus, progressInfo: progress, result, error: workerErr, runtime } = event.data;
+        const {
+          type,
+          modelId: workerModelId,
+          status: newStatus,
+          progressInfo: progress,
+          result,
+          error: workerErr,
+          runtime,
+        } = event.data;
+
+        const activeId = workerModelId || selectedModelId;
 
         if (type === 'status' && newStatus) {
           setStatus(newStatus);
+          if (newStatus === 'loading-model') {
+            setCacheStates((prev) => ({ ...prev, [activeId]: 'loading' }));
+          }
           if (runtime) setDetectedRuntime(runtime);
         } else if (type === 'progress' && progress) {
           setProgressInfo(progress);
+          if (progress.progress !== undefined) {
+            setDownloadProgress((prev) => ({ ...prev, [activeId]: progress.progress }));
+            setCacheStates((prev) => ({ ...prev, [activeId]: 'downloading' }));
+          }
+        } else if (type === 'model-ready') {
+          markModelAsCached(activeId);
+          setCacheStates((prev) => ({ ...prev, [activeId]: 'ready' }));
+          if (status === 'loading-model') setStatus('idle');
+          if (runtime) setDetectedRuntime(runtime);
         } else if (type === 'result' && result) {
+          markModelAsCached(activeId);
+          setCacheStates((prev) => ({ ...prev, [activeId]: 'ready' }));
+
           const { resultBitmap, metrics: resultMetrics } = result;
           if (resultBitmap) {
-            // Render result bitmap to OffscreenCanvas or Canvas to create downloadable PNG blob
+            // Render result bitmap to Canvas to create downloadable PNG and WebP blobs
             const canvas = document.createElement('canvas');
             canvas.width = resultBitmap.width;
             canvas.height = resultBitmap.height;
             const ctx = canvas.getContext('2d');
             if (ctx) {
               ctx.drawImage(resultBitmap, 0, 0);
+
+              // 1. Transparent PNG
               canvas.toBlob((blob) => {
                 if (blob) {
-                  setResultBlob(blob);
+                  setResultPngBlob(blob);
                   const url = URL.createObjectURL(blob);
                   setResultUrl(url);
                 }
               }, 'image/png');
+
+              // 2. Transparent WebP
+              canvas.toBlob((blob) => {
+                if (blob) {
+                  setResultWebpBlob(blob);
+                }
+              }, 'image/webp', 0.95);
             }
           }
           setMetrics(resultMetrics);
@@ -103,6 +170,7 @@ export default function App() {
           console.error('[Main] Worker error:', workerErr);
           setError(workerErr || 'Failed to process image');
           setStatus('error');
+          setCacheStates((prev) => ({ ...prev, [activeId]: 'error' }));
         }
       };
 
@@ -113,9 +181,7 @@ export default function App() {
       };
 
       workerRef.current = worker;
-
-      // Warm up model in background
-      worker.postMessage({ type: 'preload' });
+      // NOTE: Models are LAZY-LOADED. No model is downloaded until requested by the user.
     } catch (e: any) {
       console.error('[Main] Failed to create Web Worker:', e);
       setError('Web Worker support is required for background inference.');
@@ -128,70 +194,101 @@ export default function App() {
     };
   }, []);
 
-  // Process selected image
-  const processImageFile = useCallback(async (file: File) => {
-    setError(null);
-    setResultUrl(null);
-    setResultBlob(null);
-    setMetrics(null);
-    setStatus('removing-background');
-
-    const fileName = file.name || 'image.png';
-    setOriginalName(fileName);
-    setOriginalSizeStr(`${(file.size / (1024 * 1024)).toFixed(2)} MB`);
-
-    // Create local object URL for preview (strictly local in browser memory)
-    const localUrl = URL.createObjectURL(file);
-    setOriginalUrl(localUrl);
-
+  // Handle model selection: save to localStorage WITHOUT auto-downloading
+  const handleSelectModel = useCallback((modelId: ModelId) => {
+    setSelectedModelId(modelId);
     try {
-      // Decode image locally using ImageBitmap
-      const imageBitmap = await createImageBitmap(file);
-      const { width, height } = imageBitmap;
-      setOriginalDimensions({ width, height });
-
-      if (!workerRef.current) {
-        throw new Error('Worker is not available');
-      }
-
-      // Send to Web Worker with transferable ImageBitmap
-      workerRef.current.postMessage(
-        {
-          type: 'process',
-          payload: {
-            imageBitmap,
-            width,
-            height,
-          },
-        },
-        [imageBitmap]
-      );
-    } catch (err: any) {
-      console.error('[Main] Error reading image file:', err);
-      setError(err?.message || 'Failed to read image file');
-      setStatus('error');
+      localStorage.setItem(STORAGE_SELECTED_MODEL, modelId);
+    } catch {
+      // Ignore
     }
   }, []);
 
-  // Handle preset sample images
-  const handleSampleSelected = useCallback(async (url: string, name: string) => {
-    try {
-      setStatus('loading-model');
+  // Handle explicit model download request
+  const handleDownloadModel = useCallback((modelId: ModelId) => {
+    if (!workerRef.current) return;
+    setStatus('loading-model');
+    setCacheStates((prev) => ({ ...prev, [modelId]: 'downloading' }));
+    workerRef.current.postMessage({
+      type: 'load-model',
+      payload: { modelId },
+    });
+  }, []);
+
+  // Process selected image
+  const processImageFile = useCallback(
+    async (file: File) => {
       setError(null);
-      // Fetch sample into a local blob
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const file = new File([blob], `${name.toLowerCase()}.jpg`, { type: blob.type || 'image/jpeg' });
-      processImageFile(file);
-    } catch (err: any) {
-      setError(`Failed to load sample image: ${err?.message}`);
-      setStatus('error');
-    }
-  }, [processImageFile]);
+      setResultUrl(null);
+      setResultPngBlob(null);
+      setResultWebpBlob(null);
+      setMetrics(null);
+      setStatus('loading-model');
+
+      const fileName = file.name || 'image.png';
+      setOriginalName(fileName);
+      setOriginalSizeStr(`${(file.size / (1024 * 1024)).toFixed(2)} MB`);
+
+      // Create local object URL for preview (strictly local in browser memory)
+      const localUrl = URL.createObjectURL(file);
+      setOriginalUrl(localUrl);
+
+      try {
+        // Decode image locally using ImageBitmap
+        const imageBitmap = await createImageBitmap(file);
+        const { width, height } = imageBitmap;
+        setOriginalDimensions({ width, height });
+
+        if (!workerRef.current) {
+          throw new Error('Worker is not available');
+        }
+
+        // Send to Web Worker with transferable ImageBitmap and selectedModelId
+        workerRef.current.postMessage(
+          {
+            type: 'process',
+            payload: {
+              modelId: selectedModelId,
+              imageBitmap,
+              width,
+              height,
+            },
+          },
+          [imageBitmap]
+        );
+      } catch (err: any) {
+        console.error('[Main] Error reading image file:', err);
+        setError(err?.message || 'Failed to read image file');
+        setStatus('error');
+      }
+    },
+    [selectedModelId]
+  );
+
+  // Handle preset sample images
+  const handleSampleSelected = useCallback(
+    async (url: string, name: string) => {
+      try {
+        setStatus('loading-model');
+        setError(null);
+        // Fetch sample into a local blob
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const file = new File([blob], `${name.toLowerCase()}.jpg`, {
+          type: blob.type || 'image/jpeg',
+        });
+        processImageFile(file);
+      } catch (err: any) {
+        setError(`Failed to load sample image: ${err?.message}`);
+        setStatus('error');
+      }
+    },
+    [processImageFile]
+  );
 
   // Handle Download PNG
-  const handleDownload = useCallback(() => {
-    if (!resultBlob && !resultUrl) return;
+  const handleDownloadPng = useCallback(() => {
+    if (!resultPngBlob && !resultUrl) return;
 
     const baseName = originalName.replace(/\.[^/.]+$/, '');
     const outName = `${baseName}-nobg.png`;
@@ -202,24 +299,47 @@ export default function App() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [resultBlob, resultUrl, originalName]);
+  }, [resultPngBlob, resultUrl, originalName]);
+
+  // Handle Download Transparent WebP
+  const handleDownloadWebp = useCallback(() => {
+    if (!resultWebpBlob) return;
+
+    const baseName = originalName.replace(/\.[^/.]+$/, '');
+    const outName = `${baseName}-nobg.webp`;
+
+    const url = URL.createObjectURL(resultWebpBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = outName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [resultWebpBlob, originalName]);
 
   // Handle Reset / Upload New
   const handleReset = useCallback(() => {
     setOriginalUrl(null);
     setResultUrl(null);
-    setResultBlob(null);
+    setResultPngBlob(null);
+    setResultWebpBlob(null);
     setMetrics(null);
     setStatus('idle');
     setError(null);
   }, []);
 
   const isProcessing = status === 'loading-model' || status === 'removing-background';
+  const selectedMetadata = getModelMetadata(selectedModelId);
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 selection:bg-indigo-500 selection:text-white">
       {/* Header */}
-      <Header detectedRuntime={detectedRuntime} modelReady={status !== 'loading-model'} />
+      <Header
+        detectedRuntime={detectedRuntime}
+        modelReady={status !== 'loading-model'}
+        selectedModelName={selectedMetadata.name}
+      />
 
       {/* Main Content */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col items-center">
@@ -228,19 +348,30 @@ export default function App() {
           <div className="flex items-center gap-2 text-zinc-300">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
-              <strong>Zero-Server Architecture:</strong> Your photo is segmented directly inside your browser using{' '}
-              <span className="text-indigo-300 font-semibold">BiRefNet-lite 512</span> ONNX Runtime Web.
+              <strong>Zero-Server Architecture:</strong> 100% Client-Side. Your images never leave your browser.
             </span>
           </div>
 
           <div className="flex items-center gap-3 text-zinc-400 text-[11px] shrink-0 font-mono">
-            <span>Execution Provider: {detectedRuntime || 'Checking...'}</span>
+            <span>Runtime: <strong className="text-zinc-200">{detectedRuntime || 'Checking...'}</strong></span>
           </div>
+        </div>
+
+        {/* Model Selector */}
+        <div className="w-full mb-6">
+          <ModelSelector
+            selectedModelId={selectedModelId}
+            onSelectModel={handleSelectModel}
+            onDownloadModel={handleDownloadModel}
+            cacheStates={cacheStates}
+            downloadProgress={downloadProgress}
+            disabled={isProcessing}
+          />
         </div>
 
         {/* Upload State (when no image selected yet) */}
         {!originalUrl ? (
-          <div className="w-full max-w-2xl my-auto py-6">
+          <div className="w-full max-w-2xl my-auto py-2">
             <ImageUploader
               onImageSelected={processImageFile}
               onSampleSelected={handleSampleSelected}
@@ -252,6 +383,7 @@ export default function App() {
               progressInfo={progressInfo}
               metrics={metrics}
               error={error}
+              modelName={selectedMetadata.name}
             />
           </div>
         ) : (
@@ -263,6 +395,7 @@ export default function App() {
               progressInfo={progressInfo}
               metrics={metrics}
               error={error}
+              modelName={selectedMetadata.name}
             />
 
             {/* View Mode Switcher (Side-by-side vs Split Slider) */}
@@ -311,14 +444,23 @@ export default function App() {
                   height={originalDimensions?.height}
                 />
 
-                <div className="flex justify-end gap-2 pt-2">
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={handleDownload}
+                    onClick={handleDownloadPng}
                     className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm shadow-md transition-all cursor-pointer"
                   >
                     Download PNG
                   </button>
+                  {resultWebpBlob && (
+                    <button
+                      type="button"
+                      onClick={handleDownloadWebp}
+                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm shadow-md transition-all cursor-pointer"
+                    >
+                      Download WebP
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleReset}
@@ -344,7 +486,8 @@ export default function App() {
                   isLoading={isProcessing}
                   width={originalDimensions?.width}
                   height={originalDimensions?.height}
-                  onDownload={handleDownload}
+                  onDownload={handleDownloadPng}
+                  onDownloadWebp={handleDownloadWebp}
                   onReset={handleReset}
                 />
               </div>
@@ -357,6 +500,7 @@ export default function App() {
       <PerformanceBar
         metrics={metrics}
         detectedRuntime={detectedRuntime || undefined}
+        selectedModelName={selectedMetadata.name}
       />
     </div>
   );

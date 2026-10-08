@@ -7,6 +7,7 @@ interface ProcessingStatusProps {
   progressInfo?: ModelProgressInfo | null;
   metrics?: ProcessingMetrics | null;
   error?: string | null;
+  modelName?: string;
 }
 
 export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
@@ -14,6 +15,7 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
   progressInfo,
   metrics,
   error,
+  modelName,
 }) => {
   if (status === 'idle') return null;
 
@@ -23,6 +25,8 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
     return `${mb.toFixed(1)} MB`;
   };
 
+  const activeModelDisplay = metrics?.modelName || modelName || 'AI model';
+
   return (
     <div className="w-full my-4 rounded-xl border p-4 transition-all duration-300">
       {status === 'loading-model' && (
@@ -31,7 +35,7 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
             <div className="flex items-center gap-2.5">
               <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
               <span className="font-medium text-sm text-indigo-200">
-                Loading AI model...
+                Loading {activeModelDisplay}...
               </span>
             </div>
             {progressInfo?.progress !== undefined && (
@@ -61,7 +65,7 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
 
           <p className="text-xs text-zinc-400 flex items-center gap-1.5">
             <HardDrive className="w-3.5 h-3.5 text-zinc-500" />
-            <span>BiRefNet-lite 512 is cached in browser storage after first download.</span>
+            <span>Model weights are saved in browser storage after first download.</span>
           </p>
         </div>
       )}
@@ -71,11 +75,11 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
           <div className="flex items-center gap-2.5">
             <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
             <span className="font-medium text-sm text-zinc-100">
-              Removing background...
+              Removing background with {activeModelDisplay}...
             </span>
           </div>
           <span className="text-xs text-zinc-400 font-mono">
-            Running 512×512 bilateral segmentation
+            Client-side segmentation
           </span>
         </div>
       )}

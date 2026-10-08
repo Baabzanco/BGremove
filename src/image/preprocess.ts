@@ -27,15 +27,20 @@ export function preprocessToNCHW(
   const height = targetSize;
   let sourceImageData: ImageData;
 
-  if (source instanceof ImageData) {
-    if (source.width === width && source.height === height) {
-      sourceImageData = source;
+  const isImageData =
+    (typeof ImageData !== 'undefined' && source instanceof ImageData) ||
+    ('data' in source && 'width' in source && 'height' in source);
+
+  if (isImageData) {
+    const imgData = source as ImageData;
+    if (imgData.width === width && imgData.height === height) {
+      sourceImageData = imgData;
     } else {
-      sourceImageData = resizeImageData(source, width, height);
+      sourceImageData = resizeImageData(imgData, width, height);
     }
   } else {
     // ImageBitmap: draw to OffscreenCanvas or regular Canvas
-    sourceImageData = sampleBitmapToImageData(source, width, height);
+    sourceImageData = sampleBitmapToImageData(source as ImageBitmap, width, height);
   }
 
   const { data } = sourceImageData;

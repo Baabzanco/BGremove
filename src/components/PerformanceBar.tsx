@@ -5,11 +5,13 @@ import type { ProcessingMetrics } from '../types';
 interface PerformanceBarProps {
   metrics: ProcessingMetrics | null;
   detectedRuntime?: string;
+  selectedModelName?: string;
 }
 
 export const PerformanceBar: React.FC<PerformanceBarProps> = ({
   metrics,
   detectedRuntime,
+  selectedModelName,
 }) => {
   return (
     <footer className="w-full mt-10 border-t border-zinc-800/80 bg-zinc-950/60 backdrop-blur-sm py-4 px-4 sm:px-6">
@@ -20,7 +22,7 @@ export const PerformanceBar: React.FC<PerformanceBarProps> = ({
             <Cpu className="w-3.5 h-3.5 text-indigo-400" />
             <span className="text-zinc-500">AI Model:</span>
             <span className="font-semibold text-zinc-200">
-              {metrics?.modelName || 'BiRefNet-lite 512'}
+              {metrics?.modelName || selectedModelName || 'BiRefNet-lite 512'}
             </span>
           </div>
 

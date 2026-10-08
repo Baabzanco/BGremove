@@ -7,6 +7,7 @@ interface ResultPreviewProps {
   width?: number;
   height?: number;
   onDownload: () => void;
+  onDownloadWebp?: () => void;
   onReset: () => void;
 }
 
@@ -18,16 +19,25 @@ export const ResultPreview: React.FC<ResultPreviewProps> = ({
   width,
   height,
   onDownload,
+  onDownloadWebp,
   onReset,
 }) => {
   const [bgOption, setBgOption] = useState<BgOption>('checkerboard');
   const [customColor, setCustomColor] = useState('#2563eb');
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
 
   const handleDownloadClick = () => {
     onDownload();
-    setDownloadSuccess(true);
-    setTimeout(() => setDownloadSuccess(false), 2000);
+    setDownloadSuccess('png');
+    setTimeout(() => setDownloadSuccess(null), 2000);
+  };
+
+  const handleDownloadWebpClick = () => {
+    if (onDownloadWebp) {
+      onDownloadWebp();
+      setDownloadSuccess('webp');
+      setTimeout(() => setDownloadSuccess(null), 2000);
+    }
   };
 
   const getBgStyle = () => {
@@ -171,18 +181,18 @@ export const ResultPreview: React.FC<ResultPreviewProps> = ({
             </div>
           </div>
 
-          {/* Action Buttons: Download PNG & Reset */}
-          <div className="flex items-center gap-2">
+          {/* Action Buttons: Download PNG, Download WebP & Reset */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
             <button
               type="button"
               onClick={handleDownloadClick}
               disabled={isLoading || !resultUrl}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm shadow-md shadow-emerald-950 transition-all cursor-pointer disabled:opacity-50"
+              className="flex-1 min-w-[130px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs sm:text-sm shadow-md shadow-emerald-950 transition-all cursor-pointer disabled:opacity-50"
             >
-              {downloadSuccess ? (
+              {downloadSuccess === 'png' ? (
                 <>
                   <Check className="w-4 h-4 text-white" />
-                  <span>Downloaded!</span>
+                  <span>PNG Saved!</span>
                 </>
               ) : (
                 <>
@@ -191,6 +201,27 @@ export const ResultPreview: React.FC<ResultPreviewProps> = ({
                 </>
               )}
             </button>
+
+            {onDownloadWebp && (
+              <button
+                type="button"
+                onClick={handleDownloadWebpClick}
+                disabled={isLoading || !resultUrl}
+                className="flex-1 min-w-[130px] flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-xs sm:text-sm shadow-md shadow-indigo-950 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {downloadSuccess === 'webp' ? (
+                  <>
+                    <Check className="w-4 h-4 text-white" />
+                    <span>WebP Saved!</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    <span>Download WebP</span>
+                  </>
+                )}
+              </button>
+            )}
 
             <button
               type="button"

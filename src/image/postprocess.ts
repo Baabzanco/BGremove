@@ -35,10 +35,10 @@ export function logitsToAlphaMatte(
 }
 
 /**
- * Creates an OffscreenCanvas or Canvas containing the 512x512 mask
+ * Creates an OffscreenCanvas or Canvas containing the mask
  */
 function createMaskCanvas(
-  alphaMatte512: Uint8ClampedArray,
+  alphaMatte: Uint8ClampedArray,
   width = 512,
   height = 512
 ): OffscreenCanvas {
@@ -50,7 +50,7 @@ function createMaskCanvas(
   const data = imgData.data;
 
   for (let i = 0; i < width * height; i++) {
-    const a = alphaMatte512[i];
+    const a = alphaMatte[i];
     const idx = i * 4;
     // Store grayscale in RGB channels to easily sample later
     data[idx] = a;
@@ -64,15 +64,17 @@ function createMaskCanvas(
 }
 
 /**
- * Interpolates the 512x512 alpha matte to target resolution (originalWidth x originalHeight)
+ * Interpolates the alpha matte to target resolution (originalWidth x originalHeight)
  * using GPU-accelerated bicubic/bilinear smoothing via OffscreenCanvas
  */
 export function upscaleMaskToOriginal(
-  alphaMatte512: Uint8ClampedArray,
+  alphaMatte: Uint8ClampedArray,
   origWidth: number,
-  origHeight: number
+  origHeight: number,
+  maskWidth = 512,
+  maskHeight = 512
 ): Uint8ClampedArray {
-  const maskCanvas512 = createMaskCanvas(alphaMatte512, 512, 512);
+  const maskCanvas = createMaskCanvas(alphaMatte, maskWidth, maskHeight);
 
   // Scaled canvas at original resolution
   const scaledCanvas = new OffscreenCanvas(origWidth, origHeight);
@@ -81,7 +83,7 @@ export function upscaleMaskToOriginal(
 
   scaledCtx.imageSmoothingEnabled = true;
   scaledCtx.imageSmoothingQuality = 'high';
-  scaledCtx.drawImage(maskCanvas512, 0, 0, origWidth, origHeight);
+  scaledCtx.drawImage(maskCanvas, 0, 0, origWidth, origHeight);
 
   const scaledImgData = scaledCtx.getImageData(0, 0, origWidth, origHeight);
   const scaledData = scaledImgData.data;

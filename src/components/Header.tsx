@@ -5,9 +5,10 @@ import type { ExecutionRuntime } from '../types';
 interface HeaderProps {
   detectedRuntime?: ExecutionRuntime | null;
   modelReady?: boolean;
+  selectedModelName?: string;
 }
 
-export const Header: React.FC<HeaderProps> = ({ detectedRuntime, modelReady }) => {
+export const Header: React.FC<HeaderProps> = ({ detectedRuntime, modelReady, selectedModelName }) => {
   return (
     <header className="w-full border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-4 sm:px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -16,12 +17,12 @@ export const Header: React.FC<HeaderProps> = ({ detectedRuntime, modelReady }) =
             <Sparkles className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold tracking-tight text-white">
                 AI Background Remover
               </h1>
               <span className="text-[11px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700/60">
-                BiRefNet-lite 512
+                {selectedModelName || 'Multi-Model AI'}
               </span>
             </div>
             <p className="text-xs sm:text-sm text-zinc-400 flex items-center gap-1.5 mt-0.5">

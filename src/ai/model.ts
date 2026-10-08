@@ -81,8 +81,13 @@ export async function loadBiRefNetModel(
     // WASM Fallback
     console.log('[AI Worker] Initializing BiRefNet-lite 512 on WASM...');
     try {
+      const fallbackDevice =
+        typeof process !== 'undefined' && process.versions?.node && typeof window === 'undefined'
+          ? 'cpu'
+          : 'wasm';
+
       const model = await AutoModel.from_pretrained(MODEL_ID, {
-        device: 'wasm',
+        device: fallbackDevice,
         dtype: 'fp32',
         progress_callback: (data: any) => {
           if (onProgress && data) {
@@ -109,4 +114,9 @@ export async function loadBiRefNetModel(
   })();
 
   return loadingPromise;
+}
+
+export function disposeBiRefNetModel(): void {
+  cachedBundle = null;
+  loadingPromise = null;
 }
